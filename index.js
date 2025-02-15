@@ -1,9 +1,17 @@
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
-const uuid = require('uuid');
+const cors = require('cors');
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = 3000;
+
+// Enable CORS (Allows frontend to communicate with backend)
+app.use(cors());
+
+// Middleware
+app.use(express.static('public'));
+app.use(express.json());
 
 // Database connection setup
 const db = mysql.createPool({
@@ -14,21 +22,23 @@ const db = mysql.createPool({
 });
 
 
-// Middleware
-app.use(express.static('public'));
-app.use(express.json());
+// Expose API URL to frontend
+const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000';
+app.get('/config', (req, res) => {
+  res.json({ API_BASE_URL });
+});
 
 // Create a new task
 app.post('/tasks', async (req, res) => {
-  const { taskName, dueDate } = req.body;
-  const taskId = uuid.v4(); // Generate unique task ID
+  const { taskName, taskDescription, dueDate } = req.body;
 
   try {
-    await db.execute(
-      'INSERT INTO Tasks (task_id, task_name, due_date, completed) VALUES (?, ?, ?, ?)',
-      [taskId, taskName, dueDate, false]
+    const [result] = await db.execute(
+      'INSERT INTO Tasks (task_name, task_description, due_date) VALUES (?, ?, ?)',
+      [taskName, taskDescription || null, dueDate || null]
     );
-    res.status(201).json({ message: 'Task created successfully', taskId });
+
+    res.status(201).json({ message: 'Task created successfully', taskId: result.insertId });
   } catch (error) {
     console.error('Error creating task:', error);
     res.status(500).json({ error: 'Could not create task' });
@@ -47,11 +57,11 @@ app.get('/tasks', async (req, res) => {
 });
 
 // Get a task by ID
-app.get('/tasks/:taskId', async (req, res) => {
-  const { taskId } = req.params;
+app.get('/tasks/:id', async (req, res) => {
+  const { id } = req.params;
 
   try {
-    const [task] = await db.query('SELECT * FROM Tasks WHERE task_id = ?', [taskId]);
+    const [task] = await db.query('SELECT * FROM Tasks WHERE id = ?', [id]);
     if (task.length > 0) {
       res.status(200).json(task[0]);
     } else {
@@ -63,14 +73,31 @@ app.get('/tasks/:taskId', async (req, res) => {
   }
 });
 
-// Mark task as completed
-app.put('/tasks/:taskId', async (req, res) => {
-  const { taskId } = req.params;
+// Update a task
+app.put('/tasks/:id', async (req, res) => {
+  const { id } = req.params;
+  const { taskName, taskDescription, dueDate, completed } = req.body;
 
   try {
-    const [result] = await db.execute('UPDATE Tasks SET completed = ? WHERE task_id = ?', [true, taskId]);
+    const query = `
+      UPDATE Tasks 
+      SET task_name = COALESCE(?, task_name), 
+          task_description = COALESCE(?, task_description), 
+          due_date = COALESCE(?, due_date), 
+          completed = COALESCE(?, completed)
+      WHERE id = ?
+    `;
+
+    const [result] = await db.execute(query, [
+      taskName || null, 
+      taskDescription || null, 
+      dueDate || null, 
+      completed !== undefined ? (completed ? 1 : 0) : null, 
+      id
+    ]);
+
     if (result.affectedRows > 0) {
-      res.status(200).json({ message: 'Task marked as completed' });
+      res.status(200).json({ message: 'Task updated successfully' });
     } else {
       res.status(404).json({ error: 'Task not found' });
     }
@@ -81,11 +108,11 @@ app.put('/tasks/:taskId', async (req, res) => {
 });
 
 // Delete a task
-app.delete('/tasks/:taskId', async (req, res) => {
-  const { taskId } = req.params;
+app.delete('/tasks/:id', async (req, res) => {
+  const { id } = req.params;
 
   try {
-    const [result] = await db.execute('DELETE FROM Tasks WHERE task_id = ?', [taskId]);
+    const [result] = await db.execute('DELETE FROM Tasks WHERE id = ?', [id]);
     if (result.affectedRows > 0) {
       res.status(200).json({ message: 'Task deleted successfully' });
     } else {
